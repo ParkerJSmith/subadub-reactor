@@ -38,7 +38,9 @@
   let displayedTrackBlob = null;
 
   let pauseAfterSub = false;
-  let replayingSub = false;
+  let redrawSubtitle = false;
+
+  let currentCueIndex = 0;
 
   // Convert WebVTT text to plain text plus "simple" tags (allowed in SRT)
   const TAG_REGEX = RegExp('</?([^>]*)>', 'ig');
@@ -131,7 +133,6 @@
 
   function handleSubsListSetOrChange(selectElem) {
     const trackId = selectElem.value;
-    // console.log('selecting track', trackId);
 
     selectedTrackId = trackId;
 
@@ -289,7 +290,6 @@
       downloadButtonElem.style.cssText = 'margin: 5px; border: none';
       downloadButtonElem.addEventListener('click', function(e) {
         e.preventDefault();
-        // console.log('download click');
         downloadSRT();
       }, false);
 
@@ -338,24 +338,20 @@
       customSubsElem.style.cssText = 'position: absolute; bottom: 30px; left: 0; right: 0; color: white; font-size: 48px; text-align: center; user-select: text; -moz-user-select: text; z-index: 100; pointer-events: none';
 
       trackElem.addEventListener('cuechange', function(e) {
-        if (pauseAfterSub && !replayingSub) {
+        if (pauseAfterSub && !redrawSubtitle && customSubsElem.children.length !== 0) {
           pausePlayback();
-        } else if (replayingSub) {
-          replayingSub = false;
-        }
-        // Remove all children
-        while (customSubsElem.firstChild) {
-          customSubsElem.removeChild(customSubsElem.firstChild);
+          return;
+        } else if (redrawSubtitle) {
+          redrawSubtitle = false;
         }
 
         const track = e.target.track;
-        // console.log('active now', track.activeCues);
-        for (const cue of track.activeCues) {
-          const cueElem = document.createElement('div');
-          cueElem.style.cssText = 'background: rgba(0,0,0,0.5); white-space: pre-wrap; padding: 0.2em 0.3em; margin: 10px auto; width: fit-content; width: -moz-fit-content; pointer-events: auto';
-          cueElem.innerHTML = vttTextToSimple(cue.text, true); // may contain simple tags like <i> etc.
-          customSubsElem.appendChild(cueElem);
+        const cues = [...trackElem.track.cues];
+        if (track.activeCues.length) {
+          currentCueIndex = cues.findIndex(c => c.startTime === track.activeCues[0].startTime);
         }
+
+        drawSubtitles(track.activeCues, customSubsElem);
       }, false);
 
       // Appending this to the player rather than the document changes details of behavior.
@@ -366,6 +362,23 @@
       playerElem.appendChild(customSubsElem);
 
       updateToggleDisplay();
+    }
+
+    function drawSubtitles(cues, container) {
+      // Remove existing subtitles
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
+
+      for (const cue of cues) {
+        const cueElem = document.createElement('div');
+        cueElem.style.cssText =
+          'background: rgba(0,0,0,0.8); white-space: pre-wrap; padding: 0.2em 0.3em; margin: 10px auto; width: fit-content; width: -moz-fit-content; pointer-events: auto';
+
+        cueElem.innerHTML = vttTextToSimple(cue.text, true);
+
+        container.appendChild(cueElem);
+      }
     }
 
     function removeTrackElem() {
@@ -391,7 +404,6 @@
 
     // Reconcile DOM if necessary
     if (targetSubsList !== displayedSubsList) {
-      // console.log('updating subs list DOM', targetSubsList, displayedSubsList);
 
       removeSubsList();
       if (targetSubsList) {
@@ -416,7 +428,6 @@
 
     // Reconcile DOM if necessary
     if (targetTrackBlob !== displayedTrackBlob) {
-      // console.log('need to update track blob', targetTrackBlob, displayedTrackBlob);
 
       removeTrackElem();
       if (targetTrackBlob) {
@@ -496,7 +507,9 @@
     const player = getNetflixPlayer();
 
     if (player) {
-      console.log("why isn't this working....");
+      redrawSubtitle = true;
+      const trackElem = document.getElementById(TRACK_ELEM_ID);
+      trackElem.dispatchEvent(new Event('cuechange'));
       player.play();
     }
   }
@@ -519,21 +532,15 @@
     }
 
     const cues = [...trackElem.track.cues];
-    const currentTime = videoElem.currentTime;
 
-    // Find the cue currently playing, or the first cue after the current time
-    let index = cues.findIndex(cue =>
-      currentTime >= cue.startTime && currentTime <= cue.endTime
-    );
-
-    // Move to previous cue
-    if (index === -1) {
-      index = cues.findIndex(cue => cue.startTime > currentTime);
+    if (currentCueIndex >= 0) {
+      seekTo(cues[currentCueIndex - 1].startTime);
+    } else {
+      seekTo(cues[currentCueIndex].startTime);
     }
 
-    if (index >= 0) {
-      seekTo(cues[index - 1].startTime);
-    }
+    redrawSubtitle = true;
+    renderAndReconcile();
   }
 
   function goToNextSub() {
@@ -547,17 +554,11 @@
     const cues = [...trackElem.track.cues];
     const currentTime = videoElem.currentTime;
 
-    let index = cues.findIndex(cue =>
-      currentTime >= cue.startTime && currentTime <= cue.endTime
-    );
-
-    if (index === -1) {
-      index = cues.findIndex(cue => cue.startTime > currentTime);
+    if (currentCueIndex >= 0 && currentCueIndex < cues.length - 1) {
+      seekTo(cues[currentCueIndex + 1].startTime);
     }
-
-    if (index >= 0 && index < cues.length - 1) {
-      seekTo(cues[index + 1].startTime);
-    }
+    redrawSubtitle = true;
+    renderAndReconcile();
   }
 
   function replaySub() {
@@ -568,34 +569,18 @@
       return;
     }
 
-    replayingSub = true;
-
     const cues = [...trackElem.track.cues];
-    const currentTime = videoElem.currentTime;
 
-    const cue = cues.find(cue =>
-      currentTime >= cue.startTime && currentTime <= cue.endTime
-    );
-
-    if (!cue) {
-      const index = cues.findIndex(cue =>
-        cue.startTime >= currentTime
-      );
-      if (index === 0) {
-        seekTo(cues[index].startTime);
-      }
-      seekTo(cues[index - 1].startTime);
-      playPlayback();
-    } else {
-      seekTo(cue.startTime + 0.05);
-      playPlayback();
-    }
+    seekTo(cues[currentCueIndex].startTime);
+    redrawSubtitle = true;
+    renderAndReconcile();
+    redrawSubtitle = true;
+    playPlayback();
   }
 
   function togglePauseAfterSub() {
     pauseAfterSub = !pauseAfterSub;
     if (isPaused()) {
-      console.log("Well... it's paused....");
       playPlayback();
     }
   }
@@ -615,7 +600,6 @@
   JSON.parse = function() {
     const value = originalParse.apply(this, arguments);
     if (value && value.result && value.result.movieId && value.result.textTracks) {
-      // console.log('parse', value);
       extractMovieTextTracks(value.result);
     }
     return value;
@@ -640,9 +624,8 @@
     renderAndReconcile();
   }, POLL_INTERVAL_MS);
 
-  document.body.addEventListener('keydown', function(e) {
-    if ((e.keyCode === 67) && !e.altKey && !e.ctrlKey && !e.metaKey) { // unmodified C key
-      // console.log('copying subs text to clipboard');
+  window.addEventListener('keydown', function(e) {
+    if ((e.key === 'c') && !e.altKey && !e.ctrlKey && !e.metaKey) { // unmodified C key
       const subsElem = document.getElementById(CUSTOM_SUBS_ELEM_ID);
       if (subsElem) {
         const pieces = [];
@@ -657,14 +640,17 @@
       if (el) {
         el.click();
       }
-    } else if ((e.keyCode === 65) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    } else if ((e.key === 'a') && !e.altKey && !e.ctrlKey && !e.metaKey) {
       goToPreviousSub();
-    } else if ((e.keyCode === 68) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    } else if ((e.key === 'd') && !e.altKey && !e.ctrlKey && !e.metaKey) {
       goToNextSub();
-    } else if ((e.keyCode === 83) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    } else if ((e.key === 's') && !e.altKey && !e.ctrlKey && !e.metaKey) {
       replaySub();
-    } else if ((e.keyCode === 81) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    } else if ((e.key === 'q') && !e.altKey && !e.ctrlKey && !e.metaKey) {
       togglePauseAfterSub();
+    } else if ((e.key === 'w') && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      renderAndReconcile();
+      playPlayback();
     }
   }, false);
 
