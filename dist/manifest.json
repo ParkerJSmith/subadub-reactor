@@ -1,7 +1,7 @@
  {
   "manifest_version": 3,
-  "name": "Subadub",
-  "description" : "Enhanced Netflix subtitles for foreign language study",
+  "name": "Subadub Reactor",
+  "description" : "Subadub with helpful extra features!",
   "version": "0.1.12",
   "browser_specific_settings": {
     "gecko": {
