@@ -37,6 +37,9 @@
   let targetTrackBlob = null;
   let displayedTrackBlob = null;
 
+  let pauseAfterSub = false;
+  let replayingSub = false;
+
   // Convert WebVTT text to plain text plus "simple" tags (allowed in SRT)
   const TAG_REGEX = RegExp('</?([^>]*)>', 'ig');
   function vttTextToSimple(s, netflixRTLFix) {
@@ -232,9 +235,9 @@
     const buttomElem = document.getElementById(TOGGLE_DISPLAY_BUTTON_ID);
     if (buttomElem) {
       if (showSubsState) {
-        buttomElem.textContent = 'Hide Subs [S]';
+        buttomElem.textContent = 'Hide Subs [P]';
       } else {
-        buttomElem.textContent = 'Show Subs [S]';
+        buttomElem.textContent = 'Show Subs [P]';
       }
     }
     const subsElem = document.getElementById(CUSTOM_SUBS_ELEM_ID);
@@ -332,9 +335,14 @@
 
       const customSubsElem = document.createElement('div');
       customSubsElem.id = CUSTOM_SUBS_ELEM_ID;
-      customSubsElem.style.cssText = 'position: absolute; bottom: 20vh; left: 0; right: 0; color: white; font-size: 3vw; text-align: center; user-select: text; -moz-user-select: text; z-index: 100; pointer-events: none';
+      customSubsElem.style.cssText = 'position: absolute; bottom: 30px; left: 0; right: 0; color: white; font-size: 48px; text-align: center; user-select: text; -moz-user-select: text; z-index: 100; pointer-events: none';
 
       trackElem.addEventListener('cuechange', function(e) {
+        if (pauseAfterSub && !replayingSub) {
+          pausePlayback();
+        } else if (replayingSub) {
+          replayingSub = false;
+        }
         // Remove all children
         while (customSubsElem.firstChild) {
           customSubsElem.removeChild(customSubsElem.firstChild);
@@ -344,7 +352,7 @@
         // console.log('active now', track.activeCues);
         for (const cue of track.activeCues) {
           const cueElem = document.createElement('div');
-          cueElem.style.cssText = 'background: rgba(0,0,0,0.8); white-space: pre-wrap; padding: 0.2em 0.3em; margin: 10px auto; width: fit-content; width: -moz-fit-content; pointer-events: auto';
+          cueElem.style.cssText = 'background: rgba(0,0,0,0.5); white-space: pre-wrap; padding: 0.2em 0.3em; margin: 10px auto; width: fit-content; width: -moz-fit-content; pointer-events: auto';
           cueElem.innerHTML = vttTextToSimple(cue.text, true); // may contain simple tags like <i> etc.
           customSubsElem.appendChild(cueElem);
         }
@@ -443,6 +451,155 @@
     return null;
   }
 
+  function getNetflixPlayer() {
+    const api = netflix?.appContext?.state?.playerApp?.getAPI?.();
+
+    if (!api) {
+      console.error("Failed to access Netflix API");
+      return null;
+    }
+
+    const sessionIds = api.videoPlayer.getAllPlayerSessionIds();
+
+    for (const id of sessionIds) {
+      const player = api.videoPlayer.getVideoPlayerBySessionId(id);
+
+      if (player) {
+        return player;
+      }
+    }
+
+    return null;
+  }
+
+  function seekTo(time) {
+    const player = getNetflixPlayer();
+
+    if (!player) {
+      console.error("Netflix player unavailable");
+      return;
+    }
+
+    // Netflix seek() appears to use milliseconds
+    player.seek(time * 1000);
+  }
+
+  function pausePlayback() {
+    const player = getNetflixPlayer();
+
+    if (player) {
+      player.pause();
+    }
+  }
+
+  function playPlayback() {
+    const player = getNetflixPlayer();
+
+    if (player) {
+      console.log("why isn't this working....");
+      player.play();
+    }
+  }
+
+  function isPaused() {
+    const player = getNetflixPlayer();
+
+    if (!player) {
+      return true;
+    }
+    return player.isPaused();
+  }
+
+  function goToPreviousSub() {
+    const trackElem = document.getElementById(TRACK_ELEM_ID);
+    const videoElem = document.querySelector('video');
+
+    if (!trackElem || !trackElem.track || !trackElem.track.cues || !videoElem) {
+      return;
+    }
+
+    const cues = [...trackElem.track.cues];
+    const currentTime = videoElem.currentTime;
+
+    // Find the cue currently playing, or the first cue after the current time
+    let index = cues.findIndex(cue =>
+      currentTime >= cue.startTime && currentTime <= cue.endTime
+    );
+
+    // Move to previous cue
+    if (index === -1) {
+      index = cues.findIndex(cue => cue.startTime > currentTime);
+    }
+
+    if (index >= 0) {
+      seekTo(cues[index - 1].startTime);
+    }
+  }
+
+  function goToNextSub() {
+    const trackElem = document.getElementById(TRACK_ELEM_ID);
+    const videoElem = document.querySelector('video');
+
+    if (!trackElem || !trackElem.track || !trackElem.track.cues || !videoElem) {
+      return;
+    }
+
+    const cues = [...trackElem.track.cues];
+    const currentTime = videoElem.currentTime;
+
+    let index = cues.findIndex(cue =>
+      currentTime >= cue.startTime && currentTime <= cue.endTime
+    );
+
+    if (index === -1) {
+      index = cues.findIndex(cue => cue.startTime > currentTime);
+    }
+
+    if (index >= 0 && index < cues.length - 1) {
+      seekTo(cues[index + 1].startTime);
+    }
+  }
+
+  function replaySub() {
+    const trackElem = document.getElementById(TRACK_ELEM_ID);
+    const videoElem = document.querySelector('video');
+
+    if (!trackElem || !trackElem.track || !trackElem.track.cues || !videoElem) {
+      return;
+    }
+
+    replayingSub = true;
+
+    const cues = [...trackElem.track.cues];
+    const currentTime = videoElem.currentTime;
+
+    const cue = cues.find(cue =>
+      currentTime >= cue.startTime && currentTime <= cue.endTime
+    );
+
+    if (!cue) {
+      const index = cues.findIndex(cue =>
+        cue.startTime >= currentTime
+      );
+      if (index === 0) {
+        seekTo(cues[index].startTime);
+      }
+      seekTo(cues[index - 1].startTime);
+      playPlayback();
+    } else {
+      seekTo(cue.startTime + 0.05);
+      playPlayback();
+    }
+  }
+
+  function togglePauseAfterSub() {
+    pauseAfterSub = !pauseAfterSub;
+    if (isPaused()) {
+      console.log("Well... it's paused....");
+      playPlayback();
+    }
+  }
+
   const originalStringify = JSON.stringify;
   JSON.stringify = function(value) {
     // Don't hardcode property names here because Netflix
@@ -495,11 +652,19 @@
         const text = pieces.join('\n');
         navigator.clipboard.writeText(text);
       }
-    } else if ((e.keyCode === 83) && !e.altKey && !e.ctrlKey && !e.metaKey) { // unmodified S key
+    } else if ((e.keyCode === 80) && !e.altKey && !e.ctrlKey && !e.metaKey) { // unmodified S key
       const el = document.getElementById(TOGGLE_DISPLAY_BUTTON_ID);
       if (el) {
         el.click();
       }
+    } else if ((e.keyCode === 65) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      goToPreviousSub();
+    } else if ((e.keyCode === 68) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      goToNextSub();
+    } else if ((e.keyCode === 83) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      replaySub();
+    } else if ((e.keyCode === 81) && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      togglePauseAfterSub();
     }
   }, false);
 
